@@ -369,6 +369,8 @@ class Scheduler:
         self._scheduled_seq_group_cache: PyObjectCache = PyObjectCache(
             scheduled_seq_group_builder)
 
+        self.enabled_random_shuffle = os.environ.get("XFT_VLLM_SHUFFLE", "1") == "1"
+
     @property
     def lora_enabled(self) -> bool:
         return bool(self.lora_config)
@@ -912,6 +914,9 @@ class Scheduler:
 
         ignored_seq_groups = prefills.ignored_seq_groups
         ignored_seq_groups.extend(swapped_in.infeasible_seq_groups)
+        
+        if self.enabled_random_shuffle:
+            random.shuffle(scheduled_seq_groups)
 
         return SchedulerOutputs(
             scheduled_seq_groups=scheduled_seq_groups,
