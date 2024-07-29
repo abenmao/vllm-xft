@@ -280,7 +280,7 @@ class LLMEngine:
             observability_config=self.observability_config,
         )
 
-        if not self.model_config.embedding_mode:
+        if not self.model_config.embedding_mode and False:
             self._initialize_kv_caches()
 
         # If usage stat is enabled, collect relevant info.
@@ -400,7 +400,7 @@ class LLMEngine:
         self.cache_config.num_gpu_blocks = num_gpu_blocks
         self.cache_config.num_cpu_blocks = num_cpu_blocks
 
-        self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
+        # self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
 
     @classmethod
     def _get_executor_cls(cls,
@@ -408,7 +408,10 @@ class LLMEngine:
         distributed_executor_backend = (
             engine_config.parallel_config.distributed_executor_backend)
         # Initialize the cluster and specify the executor class.
-        if isinstance(distributed_executor_backend, type):
+        if True:
+            from vllm.executor.cpu_executor import CPUExecutor
+            executor_class = CPUExecutor
+        elif isinstance(distributed_executor_backend, type):
             if not issubclass(distributed_executor_backend, ExecutorBase):
                 raise TypeError(
                     "distributed_executor_backend must be a subclass of "
@@ -1232,8 +1235,12 @@ class LLMEngine:
                 self.output_processor.process_outputs(seq_group, outputs)
 
         # Free the finished sequence groups.
-        for scheduler in self.scheduler:
-            scheduler.free_finished_seq_groups()
+        if output:
+            # This will be skipped if output is [], since execute_model() is skipped.
+            for scheduler in self.scheduler:
+                free_xft_seq_ids = scheduler.free_finished_seq_groups()
+            self.model_executor.free_xft_cache(free_xft_seq_ids)
+        
 
         # Create the outputs.
         request_outputs: List[Union[RequestOutput,
@@ -1391,7 +1398,8 @@ class LLMEngine:
             len(scheduler.waiting) for scheduler in self.scheduler)
 
         # KV Cache Usage in %
-        num_total_gpu = self.cache_config.num_gpu_blocks
+        # num_total_gpu = self.cache_config.num_gpu_blocks
+        num_total_gpu = None
         gpu_cache_usage_sys = 0.
         if num_total_gpu is not None:
             num_free_gpu = sum(
@@ -1399,7 +1407,8 @@ class LLMEngine:
                 for scheduler in self.scheduler)
             gpu_cache_usage_sys = 1.0 - (num_free_gpu / num_total_gpu)
 
-        num_total_cpu = self.cache_config.num_cpu_blocks
+        # num_total_cpu = self.cache_config.num_cpu_blocks
+        num_total_cpu = None
         cpu_cache_usage_sys = 0.
         if num_total_cpu is not None and num_total_cpu > 0:
             num_free_cpu = sum(
@@ -1409,10 +1418,8 @@ class LLMEngine:
 
         # Prefix Cache Hit Rate. Note that we always use
         # the cache hit rate of the first virtual engine.
-        cpu_prefix_cache_hit_rate = self.scheduler[
-            0].get_prefix_cache_hit_rate(Device.CPU)
-        gpu_prefix_cache_hit_rate = self.scheduler[
-            0].get_prefix_cache_hit_rate(Device.GPU)
+        cpu_prefix_cache_hit_rate = -1
+        gpu_prefix_cache_hit_rate = -1
 
         # Iteration stats
         num_prompt_tokens_iter = 0

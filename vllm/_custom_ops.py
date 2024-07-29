@@ -14,7 +14,8 @@ if not current_platform.is_tpu():
     try:
         import vllm._C
     except ImportError as e:
-        logger.warning("Failed to import from vllm._C with %r", e)
+        # logger.warning("Failed to import from vllm._C with %r", e)
+        pass
 
 with contextlib.suppress(ImportError):
     import vllm._moe_C  # noqa: F401

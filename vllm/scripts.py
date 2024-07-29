@@ -34,7 +34,7 @@ def serve(args: argparse.Namespace) -> None:
     # EngineArgs expects the model name to be passed as --model.
     args.model = args.model_tag
 
-    asyncio.run(run_server(args))
+    run_server(args)
 
 
 def interactive_cli(args: argparse.Namespace) -> None:

@@ -165,6 +165,8 @@ class SequenceData(msgspec.Struct,
     # is called.
     _new_appended_tokens: List[int] = msgspec.field(default_factory=list)
 
+    xft_ids: int = -1
+
     def __post_init__(self) -> None:
         assert self._prompt_token_ids.typecode == "l"
         assert self._output_token_ids.typecode == "l"

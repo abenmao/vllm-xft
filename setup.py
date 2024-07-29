@@ -360,6 +360,7 @@ def find_version(filepath: str) -> str:
 
 def get_vllm_version() -> str:
     version = find_version(get_path("vllm", "version.py"))
+    return version
 
     if _no_device():
         version += "+empty"
@@ -416,6 +417,7 @@ def get_requirements() -> List[str]:
             else:
                 resolved_requirements.append(line)
         return resolved_requirements
+    return _read_requirements("requirements-cpu.txt")
 
     if _no_device():
         requirements = _read_requirements("requirements-cuda.txt")
@@ -498,11 +500,11 @@ setup(
                                     "tests*")),
     python_requires=">=3.8",
     install_requires=get_requirements(),
-    ext_modules=ext_modules,
+    # ext_modules=ext_modules,
     extras_require={
         "tensorizer": ["tensorizer>=2.9.0"],
     },
-    cmdclass={"build_ext": cmake_build_ext} if len(ext_modules) > 0 else {},
+    # cmdclass={"build_ext": cmake_build_ext} if len(ext_modules) > 0 else {},
     package_data=package_data,
     entry_points={
         "console_scripts": [

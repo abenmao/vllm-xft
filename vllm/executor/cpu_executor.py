@@ -39,8 +39,9 @@ class CPUExecutor(ExecutorBase):
         os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
 
         # Intel OpenMP setting
+        # xFT: Disabled due to observed performance degradation.
         ld_prealod_str = os.getenv("LD_PRELOAD", "")
-        if "libiomp5.so" in ld_prealod_str:
+        if "libiomp5.so" in ld_prealod_str and False:
             # The time(milliseconds) that a thread should wait after
             # completing the execution of a parallel region, before sleeping.
             os.environ['KMP_BLOCKTIME'] = "1"
@@ -55,8 +56,9 @@ class CPUExecutor(ExecutorBase):
         os.environ["LOCAL_WORLD_SIZE"] = str(
             self.parallel_config.tensor_parallel_size)
 
-        self.model_config = _verify_and_get_model_config(self.model_config)
-        self.cache_config = _verify_and_get_cache_config(self.cache_config)
+        # self.model_config = _verify_and_get_model_config(self.model_config)
+        # self.cache_config = _verify_and_get_cache_config(self.cache_config)
+        self.cache_config.enable_prefix_caching = False
         self.scheduler_config = _verify_and_get_scheduler_config(
             self.scheduler_config)
 
@@ -73,6 +75,26 @@ class CPUExecutor(ExecutorBase):
         result_handler = ResultHandler()
         self.parallel_worker_tasks: Optional[Union[Any, Awaitable[Any]]] = None
         self.workers = []
+        
+        from vllm.worker.cpu_worker import CPUWorker
+        self.driver_worker = CPUWorker(
+            model_config=self.model_config,
+            parallel_config=self.parallel_config,
+            scheduler_config=self.scheduler_config,
+            device_config=self.device_config,
+            cache_config=self.cache_config,
+            load_config=self.load_config,
+            local_rank=0,
+            rank=0,
+            distributed_init_method=self.distributed_init_method,
+            lora_config=self.lora_config,
+            kv_cache_dtype=self.cache_config.cache_dtype,
+            prompt_adapter_config=self.prompt_adapter_config,
+            is_driver_worker=True,
+        )
+        self.driver_method_invoker = _driver_method_invoker
+        self.driver_worker.load_model()
+        return
 
         if is_async:
             self.workers = [
@@ -294,6 +316,9 @@ class CPUExecutor(ExecutorBase):
         async_run_remote_workers_only to complete."""
         for result in parallel_worker_tasks:
             result.get()
+    
+    def free_xft_cache(self, xft_seq_ids:List[int]) -> bool:
+        return self.driver_method_invoker(self.driver_worker, "free_xft_cache", xft_seq_ids)
 
 
 class CPUExecutorAsync(CPUExecutor, ExecutorAsyncBase):

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Mount
 from typing_extensions import assert_never
+import uvicorn
 
 import vllm.envs as envs
 from vllm.config import ModelConfig
@@ -374,7 +375,7 @@ def build_app(args: Namespace) -> FastAPI:
     return app
 
 
-async def init_app(
+def init_app(
     async_engine_client: AsyncEngineClient,
     args: Namespace,
 ) -> FastAPI:
@@ -384,8 +385,20 @@ async def init_app(
         served_model_names = args.served_model_name
     else:
         served_model_names = [args.model]
+        
+    event_loop: Optional[asyncio.AbstractEventLoop]
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
 
-    model_config = await async_engine_client.get_model_config()
+    if event_loop is not None and event_loop.is_running():
+        # If the current is instanced by Ray Serve,
+        # there is already a running event loop
+        model_config = event_loop.run_until_complete(async_engine_client.get_model_config())
+    else:
+        # When using single vLLM without engine_use_ray
+        model_config = asyncio.run(async_engine_client.get_model_config())
 
     if args.disable_log_requests:
         request_logger = None
@@ -436,33 +449,29 @@ async def init_app(
     return app
 
 
-async def run_server(args, **uvicorn_kwargs) -> None:
+def run_server(args, **uvicorn_kwargs) -> None:
     logger.info("vLLM API server version %s", VLLM_VERSION)
     logger.info("args: %s", args)
+    
+    global engine_args
+    engine_args = AsyncEngineArgs.from_cli_args(args)
 
-    async with build_async_engine_client(args) as async_engine_client:
-        # If None, creation of the client failed and we exit.
-        if async_engine_client is None:
-            return
+    # Backend itself still global for the silly lil' health handler
+    global async_engine_client
 
-        app = await init_app(async_engine_client, args)
-
-        shutdown_task = await serve_http(
-            app,
-            engine=async_engine_client,
-            host=args.host,
-            port=args.port,
-            log_level=args.uvicorn_log_level,
-            timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
-            ssl_keyfile=args.ssl_keyfile,
-            ssl_certfile=args.ssl_certfile,
-            ssl_ca_certs=args.ssl_ca_certs,
-            ssl_cert_reqs=args.ssl_cert_reqs,
-            **uvicorn_kwargs,
-        )
-
-    # NB: Await server shutdown only after the backend context is exited
-    await shutdown_task
+    async_engine_client = AsyncLLMEngine.from_engine_args(
+        engine_args, usage_context=UsageContext.OPENAI_API_SERVER)
+    app = init_app(async_engine_client, args)
+    uvicorn.run(app,
+                host=args.host,
+                port=args.port,
+                log_level=args.uvicorn_log_level,
+                timeout_keep_alive=TIMEOUT_KEEP_ALIVE,
+                ssl_keyfile=args.ssl_keyfile,
+                ssl_certfile=args.ssl_certfile,
+                ssl_ca_certs=args.ssl_ca_certs,
+                ssl_cert_reqs=args.ssl_cert_reqs)
+    return
 
 
 if __name__ == "__main__":
@@ -473,4 +482,4 @@ if __name__ == "__main__":
     parser = make_arg_parser(parser)
     args = parser.parse_args()
 
-    asyncio.run(run_server(args))
+    run_server(args)
