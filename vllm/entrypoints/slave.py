@@ -18,6 +18,11 @@ if __name__ == "__main__":
     print(args.dtype)
     print(args.kv_cache_dtype)
 
+    if args.speculative_model:
+        draft_model = xfastertransformer.AutoModel.from_pretrained(
+            args.speculative_model, args.dtype, args.kv_cache_dtype
+        )
+        lookahead_k = args.num_speculative_tokens
     model = xfastertransformer.AutoModel.from_pretrained(
         args.model, dtype=args.dtype, kv_cache_dtype=args.kv_cache_dtype
     )
@@ -27,6 +32,21 @@ if __name__ == "__main__":
         sys.exit(0)
 
     while True:
-        model.set_input_cb()
-        model.forward_cb()
+        if args.speculative_model:
+            spec_is_prompt = model.is_prompt()
+        if not args.speculative_model or spec_is_prompt:
+            model.set_input_cb()
+        
+        if args.speculative_model:
+            if spec_is_prompt:
+                draft_model.set_input_cb()
+                proposals = draft_model.get_spec_proposals(1)
+                model.forward_cb()
+            else:
+                draft_model.set_input_cb()
+                proposals = draft_model.get_spec_proposals(lookahead_k)
+                model.set_input_cb()
+                model.verify_tokens(lookahead_k, proposals)
+        else:
+            model.forward_cb()
         model.free_seqs()

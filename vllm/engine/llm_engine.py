@@ -1196,6 +1196,8 @@ class LLMEngine:
         Returns RequestOutputs that can be returned to the client.
         """
 
+        #import pdb
+        #pdb.set_trace()
         now = time.time()
 
         # Organize outputs by [sequence group][step] instead of

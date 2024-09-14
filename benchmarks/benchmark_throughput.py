@@ -110,6 +110,8 @@ def run_vllm(
     from vllm import LLM, SamplingParams
     llm = LLM(
         model=model,
+        speculative_model=args.speculative_model,
+        num_speculative_tokens=args.num_speculative_tokens,
         tokenizer=tokenizer,
         quantization=quantization,
         tensor_parallel_size=tensor_parallel_size,
@@ -122,6 +124,7 @@ def run_vllm(
         kv_cache_dtype=kv_cache_dtype,
         quantization_param_path=quantization_param_path,
         device=device,
+        use_v2_block_manager=args.use_v2_block_manager,
         enable_prefix_caching=enable_prefix_caching,
         download_dir=download_dir,
         enable_chunked_prefill=enable_chunked_prefill,
@@ -303,6 +306,8 @@ if __name__ == "__main__":
                         help="Output length for each request. Overrides the "
                         "output length from the dataset.")
     parser.add_argument("--model", type=str, default="facebook/opt-125m")
+    parser.add_argument('--speculative-model', type=str, default=None)
+    parser.add_argument('--num-speculative-tokens', type=int, default=None)
     parser.add_argument("--tokenizer", type=str, default=None)
     parser.add_argument('--quantization',
                         '-q',
@@ -379,6 +384,7 @@ if __name__ == "__main__":
         "--enable-prefix-caching",
         action='store_true',
         help="enable automatic prefix caching for vLLM backend.")
+    parser.add_argument('--use-v2-block-manager', action='store_true')
     parser.add_argument("--enable-chunked-prefill",
                         action='store_true',
                         help="enable chunked prefill for vLLM backend.")

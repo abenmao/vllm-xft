@@ -8,7 +8,7 @@ import vllm.envs as envs
 from vllm.attention import get_attn_backend
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, ParallelConfig, PromptAdapterConfig,
-                         SchedulerConfig)
+                         SchedulerConfig, SpeculativeConfig)
 from vllm.distributed import (ensure_model_parallel_initialized,
                               init_distributed_environment)
 from vllm.logger import init_logger
@@ -133,6 +133,7 @@ class CPUWorker(LoraNotSupportedWorkerBase, LocalOrDistributedWorkerBase):
         local_rank: int,
         rank: int,
         distributed_init_method: str,
+        speculative_config: Optional[SpeculativeConfig] = None,
         lora_config: Optional[LoRAConfig] = None,
         kv_cache_dtype: Optional[str] = "auto",
         prompt_adapter_config: Optional[PromptAdapterConfig] = None,
@@ -147,6 +148,7 @@ class CPUWorker(LoraNotSupportedWorkerBase, LocalOrDistributedWorkerBase):
         self.local_rank = local_rank
         self.rank = rank
         self.distributed_init_method = distributed_init_method
+        self.speculative_config = speculative_config
         self.lora_config = lora_config
         self.prompt_adapter_config = prompt_adapter_config
         self.is_driver_worker = is_driver_worker
@@ -165,6 +167,8 @@ class CPUWorker(LoraNotSupportedWorkerBase, LocalOrDistributedWorkerBase):
         else:
             self.local_omp_cpuid = omp_cpuids.split("|")[rank]
 
+        #import pdb
+        #pdb.set_trace()
         self.model_runner: CPUModelRunner = CPUModelRunner(
             model_config,
             parallel_config,
@@ -173,6 +177,7 @@ class CPUWorker(LoraNotSupportedWorkerBase, LocalOrDistributedWorkerBase):
             cache_config,
             load_config=self.load_config,
             lora_config=self.lora_config,
+            speculative_config=self.speculative_config,
             kv_cache_dtype=kv_cache_dtype,
             prompt_adapter_config=self.prompt_adapter_config,
             is_driver_worker=is_driver_worker)

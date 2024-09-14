@@ -25,6 +25,8 @@ class CPUExecutor(ExecutorBase):
     uses_ray: bool = False
 
     def _init_executor(self) -> None:
+        #import pdb
+        #pdb.set_trace()
         assert self.device_config.device_type == "cpu"
         assert self.lora_config is None, "cpu backend doesn't support LoRA"
 
@@ -75,7 +77,9 @@ class CPUExecutor(ExecutorBase):
         result_handler = ResultHandler()
         self.parallel_worker_tasks: Optional[Union[Any, Awaitable[Any]]] = None
         self.workers = []
-        
+
+        #import pdb
+        #pdb.set_trace()
         from vllm.worker.cpu_worker import CPUWorker
         self.driver_worker = CPUWorker(
             model_config=self.model_config,
@@ -87,6 +91,7 @@ class CPUExecutor(ExecutorBase):
             local_rank=0,
             rank=0,
             distributed_init_method=self.distributed_init_method,
+            speculative_config=self.speculative_config,
             lora_config=self.lora_config,
             kv_cache_dtype=self.cache_config.cache_dtype,
             prompt_adapter_config=self.prompt_adapter_config,
@@ -142,6 +147,8 @@ class CPUExecutor(ExecutorBase):
         local_rank: int = 0,
         rank: int = 0,
     ):
+        #import pdb
+        #pdb.set_trace()
         worker_module_name = "vllm.worker.cpu_worker"
         worker_class_name = "CPUWorker"
 
