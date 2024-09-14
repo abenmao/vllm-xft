@@ -1,0 +1,7 @@
+{
+"model": "xft",
+"prompt": "Tell me a long strory",
+"max_tokens": 128,
+"stop_token_ids": [151643, 151645],
+"temperature": 0.0
+}

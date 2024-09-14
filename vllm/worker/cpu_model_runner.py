@@ -7,7 +7,7 @@ from torch import nn
 from vllm.attention import AttentionMetadata, get_attn_backend
 from vllm.config import (CacheConfig, DeviceConfig, LoadConfig, LoRAConfig,
                          ModelConfig, ParallelConfig, PromptAdapterConfig,
-                         SchedulerConfig)
+                         SchedulerConfig, SpeculativeConfig)
 from vllm.logger import init_logger
 from vllm.model_executor import SamplingMetadata
 from vllm.model_executor.model_loader import get_model
@@ -16,6 +16,7 @@ from vllm.multimodal import (MULTIMODAL_REGISTRY, BatchedTensorInputs,
 from vllm.sequence import (IntermediateTensors, SamplerOutput,
                            SequenceGroupMetadata)
 from vllm.utils import make_tensor_with_pad
+from vllm.spec_decode.util import create_sequence_group_output
 from vllm.worker.model_runner_base import (
     ModelRunnerBase, ModelRunnerInputBase,
     _add_attn_metadata_broadcastable_dict,
@@ -48,6 +49,8 @@ class CPUModelInput(ModelRunnerInputBase):
 
     def as_broadcastable_tensor_dict(
             self) -> Dict[str, Union[int, torch.Tensor]]:
+        import pdb
+        pdb.set_trace()
         tensor_dict = {
             "input_tokens": self.input_tokens,
             "input_positions": self.input_positions,
@@ -64,6 +67,8 @@ class CPUModelInput(ModelRunnerInputBase):
             tensor_dict: Dict[str, Any],
             attn_backend: Optional["AttentionBackend"] = None
     ) -> "CPUModelInput":
+        import pdb
+        pdb.set_trace()
         tensor_dict = _init_sampling_metadata_from_tensor_dict(tensor_dict)
         if attn_backend is not None:
             tensor_dict = _init_attn_metadata_from_tensor_dict(
@@ -82,6 +87,7 @@ class CPUModelRunner(ModelRunnerBase[CPUModelInput]):
         cache_config: CacheConfig,
         load_config: LoadConfig,
         lora_config: Optional[LoRAConfig],
+        speculative_config: Optional[SpeculativeConfig] = None,
         kv_cache_dtype: Optional[str] = "fp16",
         prompt_adapter_config: Optional[PromptAdapterConfig] = None,
         is_driver_worker: bool = False,
@@ -96,6 +102,7 @@ class CPUModelRunner(ModelRunnerBase[CPUModelInput]):
         self.device_config = device_config
         self.cache_config = cache_config
         self.lora_config = lora_config
+        self.speculative_config = speculative_config
         self.prompt_adapter_config = prompt_adapter_config
         self.load_config = load_config
         self.is_driver_worker = is_driver_worker
@@ -133,6 +140,11 @@ class CPUModelRunner(ModelRunnerBase[CPUModelInput]):
         #                        scheduler_config=self.scheduler_config,
         #                        cache_config=self.cache_config)
         logger.info(f"Loading xft model {self.model_config.model}, dtype = {self.model_config.dtype}, KV cache dtype = {self.kv_cache_dtype}")
+        # longer context model should be init first, since the bug in xFT
+        if self.speculative_config:
+            self.draft_model = xfastertransformer.AutoModel.from_pretrained(
+                self.speculative_config.draft_model_config.model, self.model_config.dtype, self.kv_cache_dtype
+            )
         self.model = xfastertransformer.AutoModel.from_pretrained(
             self.model_config.model, self.model_config.dtype, self.kv_cache_dtype
         )
@@ -313,6 +325,8 @@ class CPUModelRunner(ModelRunnerBase[CPUModelInput]):
         self,
         tensor_dict: Dict[str, Any],
     ) -> CPUModelInput:
+        import pdb
+        pdb.set_trace()
         return CPUModelInput.from_broadcasted_tensor_dict(
             tensor_dict,
             attn_backend=self.attn_backend,
@@ -355,8 +369,11 @@ class CPUModelRunner(ModelRunnerBase[CPUModelInput]):
             xft_max_lens = []
             for i in range(len(sampling_metadata.seq_groups)):
                 xft_max_lens.append(sampling_metadata.seq_groups[i].sampling_params.max_tokens + seq_lens[i])
-                
-        xft_seq_ids = self.model.set_input_cb(input_tokens, xft_seq_ids, xft_max_lens).tolist()
+               
+        import pdb
+        pdb.set_trace()
+        if not self.speculative_config or is_prompt:
+            xft_seq_ids = self.model.set_input_cb(input_tokens, xft_seq_ids, xft_max_lens).tolist()
 
         if is_prompt:
             for i in range(len(xft_seq_ids)):
@@ -379,9 +396,79 @@ class CPUModelRunner(ModelRunnerBase[CPUModelInput]):
         intermediate_tensors: Optional[IntermediateTensors] = None,
         num_steps: int = 1,
     ) -> Optional[List[SamplerOutput]]:
+        import pdb
+        pdb.set_trace()
         if num_steps > 1:
             raise ValueError(
                 "CPU worker does not support multi-step execution.")
+
+        seq_groups = model_input.sampling_metadata.seq_groups
+        # gen tokens phase for spec infer
+        if self.speculative_config and not seq_groups[0].is_prompt:
+            xft_ids: List[int] = []
+            xft_draft_ids: List[int] = []
+            xft_max_lens: List[int] = []
+            input_tokens: List[List[int]] = []
+            draft_is_prompt = False
+            for seq_group in seq_groups:
+                prompt_token_ids = list(list(seq_group.seq_data.values())[0].prompt_token_ids)
+                gen_token_ids = list(list(seq_group.seq_data.values())[0].output_token_ids)
+                xft_max_lens.append(len(prompt_token_ids) + seq_group.sampling_params.max_tokens)
+                seq_id = list(seq_group.seq_data.keys())[0]
+                # seq_id equal to xft_ids
+                xft_ids.append(seq_id)
+                xft_draft_id = seq_group.seq_data[seq_id].xft_draft_ids
+                if (xft_draft_id == -1):
+                    draft_is_prompt = True
+                    input_tokens.append(prompt_token_ids + gen_token_ids)
+                else:
+                    input_tokens.append([gen_token_ids[-1]])
+                    xft_draft_ids.append(xft_draft_id)
+                print(seq_id, " ", xft_draft_id, ": ", prompt_token_ids, gen_token_ids)
+
+            if len(xft_draft_ids) == 0:
+                xft_draft_ids = None
+            # Get spec infer tokens.
+            xft_draft_ids = self.draft_model.set_input_cb(input_tokens, xft_draft_ids, xft_max_lens).tolist()
+            # record the seq id for draft request
+            if draft_is_prompt:
+                for i, seq_group in enumerate(seq_groups):
+                    seq_id = list(seq_group.seq_data.keys())[0]
+                    seq_group.seq_data[seq_id].xft_draft_ids = xft_draft_ids[i]
+
+            # adjust lookahead_k
+            lookahead_k = 4 #self.speculative_config.draft_model_config
+
+            xft_draft_ids = self.draft_model.set_input_cb(input_tokens, xft_draft_ids, xft_max_lens).tolist()
+            # rejected_n List[int], rect_input_token List[int]
+            proposals = self.draft_model.get_spec_proposals(lookahead_k, rejected_n, rect_input_token)
+
+            xft_ids = self.model.set_input_cb(input_tokens, xft_ids, xft_max_lens).tolist()
+            # token_ids List[List[int]] (accepted tokens + new one token), proposals List[List[int]]
+            rejected_n, rect_input_token = self.model.verify_tokens(lookahead_k, proposals)
+
+            # Only perform sampling in the driver worker.
+            if not self.is_driver_worker:
+                return []
+
+            # Sample the next tokens.
+            sampler_output_list: List[SamplerOutput] = []
+            for step_index in range(lookahead_k):
+                step_output_token_ids: List[CompletionSequenceGroupOutput] = []
+                for seq_group in seq_groups:
+                    # Each sequence may have a different num_logprobs; retrieve it.
+                    step_output_token_ids.append(
+                        create_sequence_group_output(
+                            token_id=1200,
+                            token_id_logprob_rank=-1,
+                            token_id_logprob=0.0,
+                            seq_id = list(seq_group.seq_data.keys())[0],
+                            topk_token_ids=[],
+                            topk_logprobs=[]
+                        ))
+                sampler_output_list.append(
+                    SamplerOutput(outputs=step_output_token_ids))
+            return sampler_output_list
 
         # Compute the logits.
         logits = self.model.forward_cb()
@@ -398,6 +485,8 @@ class CPUModelRunner(ModelRunnerBase[CPUModelInput]):
         return [output]
 
     def free_xft_cache(self, xft_seq_ids:List[int]) -> bool:
+        import pdb
+        pdb.set_trace()
         return self.model.free_seqs(
             torch.tensor(xft_seq_ids, dtype=torch.long, device=self.device)
         )

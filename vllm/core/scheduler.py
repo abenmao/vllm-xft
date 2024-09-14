@@ -1193,6 +1193,8 @@ class Scheduler:
                 self._finished_requests_ids.append(seq_group.request_id)
                 for seq in seq_group.seqs_dict.values():
                     free_xft_seq_ids.append(seq.data.xft_ids)
+                    if seq.data.xft_draft_ids != -1:
+                        free_xft_seq_ids.append(seq.data.xft_draft_ids)
             else:
                 remaining.append(seq_group)
         self.running = remaining
